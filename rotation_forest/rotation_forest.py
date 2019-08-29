@@ -1,19 +1,16 @@
 import numpy as np
-
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.tree._tree import DTYPE
+from sklearn.decomposition import PCA
 from sklearn.ensemble.forest import ForestClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils import resample, gen_batches, check_random_state
-from sklearn.utils.extmath import fast_dot
-from sklearn.decomposition import PCA, RandomizedPCA
+from sklearn.utils.validation import check_is_fitted
 
-from _exceptions import NotFittedError
 
-def random_feature_subsets(array, batch_size, random_state=1234):
+def random_feature_subsets(array, batch_size, rng=1234):
     """ Generate K subsets of the features in X """
-    random_state = check_random_state(random_state)
-    features = range(array.shape[1])
-    random_state.shuffle(features)
+    rng = check_random_state(rng)
+    features = np.arange(array.shape[1])
+    rng.shuffle(features)
     for batch in gen_batches(len(features), batch_size):
         yield features[batch]
 
@@ -21,7 +18,7 @@ def random_feature_subsets(array, batch_size, random_state=1234):
 class RotationTreeClassifier(DecisionTreeClassifier):
     def __init__(self,
                  n_features_per_subset=3,
-                 rotation_algo='pca',
+                 rotation_algo="pca",
                  criterion="gini",
                  splitter="best",
                  max_depth=None,
@@ -51,17 +48,15 @@ class RotationTreeClassifier(DecisionTreeClassifier):
             presort=presort)
 
     def rotate(self, X):
-        if not hasattr(self, 'rotation_matrix'):
-            raise NotFittedError('The estimator has not been fitted')
-
-        return fast_dot(X, self.rotation_matrix)
+        check_is_fitted(self, "rotation_matrix")
+        return np.dot(X, self.rotation_matrix)
 
     def pca_algorithm(self):
         """ Deterimine PCA algorithm to use. """
-        if self.rotation_algo == 'randomized':
-            return RandomizedPCA(random_state=self.random_state)
-        elif self.rotation_algo == 'pca':
-            return PCA()
+        if self.rotation_algo == "randomized":
+            return PCA(svd_solver="randomized", random_state=self.random_state)
+        elif self.rotation_algo == "pca":
+            return PCA(random_state=self.random_state)
         else:
             raise ValueError("`rotation_algo` must be either "
                              "'pca' or 'randomized'.")
@@ -73,41 +68,38 @@ class RotationTreeClassifier(DecisionTreeClassifier):
                                         dtype=np.float32)
         for i, subset in enumerate(
                 random_feature_subsets(X, self.n_features_per_subset,
-                                       random_state=self.random_state)):
+                                       rng=self.random_state)):
             # take a 75% bootstrap from the rows
-            x_sample = resample(X, n_samples=int(n_samples*0.75),
-                                random_state=10*i)
+            x_sample = resample(X, n_samples=int(n_samples * 0.75),
+                                random_state=10 * i)
             pca = self.pca_algorithm()
             pca.fit(x_sample[:, subset])
             self.rotation_matrix[np.ix_(subset, subset)] = pca.components_
 
-    def fit(self, X, y, sample_weight=None, check_input=True):
+    def fit(self, X, y, **kwargs):
         self._fit_rotation_matrix(X)
-        super(RotationTreeClassifier, self).fit(self.rotate(X), y,
-                                                sample_weight, check_input)
+        super(RotationTreeClassifier, self).fit(self.rotate(X), y, **kwargs)
 
     def predict_proba(self, X, check_input=True):
-        return  super(RotationTreeClassifier, self).predict_proba(self.rotate(X),
-                                                                  check_input)
+        return super(RotationTreeClassifier, self).predict_proba(self.rotate(X),
+                                                                 check_input)
 
     def predict(self, X, check_input=True):
-        return super(RotationTreeClassifier, self).predict(self.rotate(X),
-                                                           check_input)
+        return super(RotationTreeClassifier, self).predict(self.rotate(X), check_input)
 
     def apply(self, X, check_input=True):
-        return super(RotationTreeClassifier, self).apply(self.rotate(X),
-                                                         check_input)
+        return super(RotationTreeClassifier, self).apply(self.rotate(X), check_input)
 
     def decision_path(self, X, check_input=True):
-        return super(RotationTreeClassifier, self).decision_path(self.rotate(X),
-                                                                 check_input)
+        return super(RotationTreeClassifier, self).decision_path(self.rotate(X), check_input)
+
 
 class RotationForestClassifier(ForestClassifier):
     def __init__(self,
                  n_estimators=10,
                  criterion="gini",
                  n_features_per_subset=3,
-                 rotation_algo='pca',
+                 rotation_algo="pca",
                  max_depth=None,
                  min_samples_split=2,
                  min_samples_leaf=1,
@@ -121,6 +113,7 @@ class RotationForestClassifier(ForestClassifier):
                  verbose=0,
                  warm_start=False,
                  class_weight=None):
+
         super(RotationForestClassifier, self).__init__(
             base_estimator=RotationTreeClassifier(),
             n_estimators=n_estimators,

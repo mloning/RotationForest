@@ -1,12 +1,10 @@
-import pytest
-import copy
-
 import numpy as np
-import numpy.testing as npt
+import pytest
+from sklearn.model_selection import train_test_split
 from sklearn.datasets import make_classification
-from sklearn.cross_validation import train_test_split
-from ..rotation_forest import random_feature_subsets
-from ..rotation_forest import RotationTreeClassifier, RotationForestClassifier
+
+from rotation_forest.rotation_forest import RotationTreeClassifier, RotationForestClassifier
+from rotation_forest.rotation_forest import random_feature_subsets
 
 
 def classification_data(n_samples=500, n_features=30, redundant_size=0.1, informative_size=0.6, repeated_size=0.1):
@@ -24,6 +22,7 @@ def classification_data(n_samples=500, n_features=30, redundant_size=0.1, inform
 
 class TestRotationTreeClassifier(object):
     """ Test Suite for RotationTreeClassifier """
+
     def test_rotation_tree(self):
         """ Smoke test for rotation tree """
         X, y = classification_data()
@@ -42,30 +41,30 @@ class TestRotationTreeClassifier(object):
 
     def test_random_feature_subsets(self):
         """ check we generate disjoint feature subsets that cover all features. """
-        array = np.arange(6*6).reshape(6, 6)
+        array = np.arange(6 * 6).reshape(6, 6)
         subsets = list(random_feature_subsets(array, batch_size=3))
         assert len(subsets) == 2
         for subset in subsets:
-            assert set(subset).issubset(range(6))
+            assert set(subset).issubset(np.arange(6))
 
         assert set(subsets[0]).intersection(set(subsets[1])) == set()
 
     def test_random_feature_subsets_batch_size_not_even(self):
-        array = np.arange(6*6).reshape(6, 6)
+        array = np.arange(6 * 6).reshape(6, 6)
         subsets = list(random_feature_subsets(array, batch_size=5))
         assert len(subsets) == 2
         assert (len(subsets[0]) + len(subsets[1])) == 6
         for subset in subsets:
-            assert set(subset).issubset(range(6))
+            assert set(subset).issubset(np.arange(6))
 
         assert set(subsets[0]).intersection(set(subsets[1])) == set()
 
     def test_random_feature_subsets_batch_size_too_big(self):
         """ request of a too large subset gives the full set """
-        array = np.arange(6*6).reshape(6, 6)
+        array = np.arange(6 * 6).reshape(6, 6)
         subsets = list(random_feature_subsets(array, batch_size=8))
         assert len(subsets) == 1
-        assert sorted(subsets[0]) == range(6)
+        np.testing.assert_array_equal(np.sort(subsets[0]), np.arange(6))
 
     def test_rotation_matrix(self):
         """ Smoke test for rotation forest """
@@ -90,6 +89,7 @@ class TestRotationTreeClassifier(object):
 
 class TestRotationForestClassifier(object):
     """ Test suite for RotationForestClassifier """
+
     def test_rotation_forest(self):
         """ Smoke test for rotation forest """
         X, y = classification_data()
@@ -151,4 +151,4 @@ class TestRotationForestClassifier(object):
         clf_no_ws.fit(X, y)
         assert set([tree.random_state for tree in clf_ws]) == set([tree.random_state for tree in clf_no_ws])
 
-        npt.assert_array_equal(clf_ws.apply(X), clf_no_ws.apply(X))
+        np.testing.assert_array_equal(clf_ws.apply(X), clf_no_ws.apply(X))
