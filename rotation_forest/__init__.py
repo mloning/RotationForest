@@ -4,3 +4,6 @@ from __future__ import division
 
 from .rotation_forest import RotationTreeClassifier
 from .rotation_forest import RotationForestClassifier
+
+from .rotation_forest import RotationTreeRegressor
+from .rotation_forest import RotationForestRegressor
