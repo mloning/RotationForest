@@ -1,6 +1,8 @@
 #!/usr/bin/env python3 -u
 # coding: utf-8
 
+__author__ = ["Markus Löning"]
+
 # code from https://github.com/joshloyal/RotationForest under MIT license
 
 import numpy as np
@@ -10,8 +12,6 @@ from sklearn.ensemble.forest import ForestClassifier
 from sklearn.ensemble.base import _set_random_states
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils.validation import check_X_y, check_array, check_random_state, check_is_fitted
-from sklearn.exceptions import DataConversionWarning
-from warnings import warn
 
 from itertools import islice
 
@@ -22,7 +22,6 @@ class RotationTreeClassifier(DecisionTreeClassifier):
                  min_features_subset=3,
                  p_sample_subset=0.5,
                  bootstrap_sample_subset=False,
-                 transformation="pca",
                  criterion="entropy",
                  splitter="best",
                  max_depth=None,
@@ -35,11 +34,22 @@ class RotationTreeClassifier(DecisionTreeClassifier):
                  class_weight=None,
                  presort=False):
 
+        if min_features_subset > max_features_subset:
+            raise ValueError("min_features_subset must be smaller than or "
+                             "equal to max_features_subset")
+
         self.max_features_subset = max_features_subset
         self.min_features_subset = min_features_subset
         self.p_sample_subset = p_sample_subset
-        self.transformation = transformation
         self.bootstrap_sample_subset = bootstrap_sample_subset
+        self.base_transformer = PCA()
+
+        # set in init
+        self.n_samples_ = None
+        self.n_features_ = None
+        self.classes_ = None
+        self.n_outputs_ = None
+        self._rng = None
 
         super(RotationTreeClassifier, self).__init__(
             criterion=criterion,
@@ -54,14 +64,6 @@ class RotationTreeClassifier(DecisionTreeClassifier):
             random_state=random_state,
             presort=presort)
 
-        # set in init
-        self.n_samples_ = None
-        self.n_features_ = None
-        self.classes_ = None
-        self.n_outputs_ = None
-        self._rng = None
-        self.base_transformer_ = None
-
     def transform(self, X, y=None):
         check_is_fitted(self, "rotation_matrix_")
         return np.dot(X, self.rotation_matrix_)
@@ -71,7 +73,7 @@ class RotationTreeClassifier(DecisionTreeClassifier):
         Warning: This method should be used to properly instantiate new
         sub-estimators.
         """
-        transformer = clone(self.base_transformer_)
+        transformer = clone(self.base_transformer)
 
         if random_state is not None:
             _set_random_states(transformer, random_state)
@@ -149,6 +151,13 @@ class RotationTreeClassifier(DecisionTreeClassifier):
         # if length is not variable, use available function to split into equally sized arrays
         if min_length == max_length:
             n_subsets = self.n_features_ // max_length
+            # make sure subsets are of given length by reusing some of the features
+            mod = self.n_features_ % n_subsets
+            if mod > 0:
+                n_extra_features = min_length - mod
+                n_subsets = n_subsets + 1
+                extra_features = rng.choice(features, size=n_extra_features, replace=False)
+                features = np.hstack([features, extra_features])
             return np.array_split(features, n_subsets)
 
         # otherwise iterate through features, selecting uniformly random number of features within
@@ -157,47 +166,39 @@ class RotationTreeClassifier(DecisionTreeClassifier):
         it = iter(features)  # iterator over features
         while True:
             # draw random number of features within bounds
-            n_features_in_subset = rng.random.randint(min_length, max_length + 1)
+            n_features_in_subset = rng.randint(min_length, max_length + 1)
 
             # select number of features and move iterator ahead
             subset = list(islice(it, n_features_in_subset))
 
-            # append if non-empty, otherwise break while loop
-            if len(subset) > 0:
+            # append subsets,
+            # for last subset, check if there are another features, otherwise reuse some of them
+            # finally, break while loop
+            len_subset = len(subset)
+            if min_length <= len_subset <= max_length:
                 subsets.append(np.array(subset))
+            elif 0 < len_subset < min_length:
+                n_extra_features = min_length - len_subset
+                extra_features = rng.choice(features, size=n_extra_features, replace=False)
+                subset = np.hstack([subset, extra_features])
+                subsets.append(subset)
             else:
                 break
 
-        # subsets = self._random_feature_subset_rand_n(features, min_length, max_length)
         return subsets
 
-    def fit(self, X, y, **kwargs):
-        # check inputs
-        X, y = check_X_y(X, y)
+    def fit(self, X, y, check_input=True, **kwargs):
+        self._rng = check_random_state(self.random_state)
+        X, y = check_X_y(X, y, multi_output=True)
+
+        self.n_samples_, self.n_features_ = X.shape
 
         y = np.atleast_1d(y)
-        if y.ndim == 2 and y.shape[1] == 1:
-            warn("A column-vector y was passed when a 1d array was"
-                 " expected. Please change the shape of y to "
-                 "(n_samples,), for example using ravel().",
-                 DataConversionWarning, stacklevel=2)
-
         if y.ndim == 1:
             # reshape is necessary to preserve the data contiguity against vs
             # [:, np.newaxis] that does not.
             y = np.reshape(y, (-1, 1))
-
-        if self.transformation == "pca":
-            self.base_transformer_ = PCA()
-        elif self.transformation == "randomized":
-            self.base_transformer_ = PCA(svd_solver="randomized")
-        else:
-            raise ValueError("`transformation` must be either 'pca' or 'randomized'.")
-
-        self.n_samples_, self.n_features_ = X.shape
         self.classes_ = np.unique(y)
-        self.n_outputs_ = y.shape[1]
-        self._rng = check_random_state(self.random_state)
 
         # fit transfomers
         self._fit_transfomers(X, y)
@@ -206,7 +207,7 @@ class RotationTreeClassifier(DecisionTreeClassifier):
         Xt = self.transform(X)
 
         # fit estimators on transformed data
-        super(RotationTreeClassifier, self).fit(Xt, y, **kwargs)
+        super(RotationTreeClassifier, self).fit(Xt, y, check_input=check_input, **kwargs)
 
     def predict_proba(self, X, check_input=True):
         check_is_fitted(self, 'rotation_matrix_')
@@ -251,7 +252,6 @@ class RotationForestClassifier(ForestClassifier):
                  min_features_subset=3,
                  p_sample_subset=0.5,
                  bootstrap_sample_subset=False,
-                 transformation="pca",
                  criterion="entropy",
                  max_depth=None,
                  min_samples_split=2,
@@ -271,7 +271,7 @@ class RotationForestClassifier(ForestClassifier):
             base_estimator=RotationTreeClassifier(),
             n_estimators=n_estimators,
             estimator_params=["min_features_subset", "max_features_subset",
-                              "p_sample_subset", "bootstrap_sample_subset", "transformation",
+                              "p_sample_subset", "bootstrap_sample_subset",
                               "criterion", "max_depth", "min_samples_split",
                               "min_samples_leaf", "min_weight_fraction_leaf",
                               "max_features", "max_leaf_nodes",
@@ -288,7 +288,6 @@ class RotationForestClassifier(ForestClassifier):
         self.max_features_subset = max_features_subset
         self.p_sample_subset = p_sample_subset
         self.bootstrap_sample_subset = bootstrap_sample_subset
-        self.transformation = transformation
         self.criterion = criterion
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
